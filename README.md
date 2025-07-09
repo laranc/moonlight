@@ -24,4 +24,4 @@ is baked into `moonlight.lua` using LuaJIT's FFI.
 ## Acknowledgements
 This project takes heavy inspiration from [mate.h](https://github.com/TomasBorques/mate.h),
 and the Zig build system. Moonlight would not be possible without [Samurai](https://github.com/michaelforney/samurai),
-the licence for which can be found in [here](https://github.com/michaelforney/samurai/blob/master/LICENSE)
+the licence for which can be found [here](https://github.com/michaelforney/samurai/blob/master/LICENSE)
