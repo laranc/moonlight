@@ -1,4 +1,10 @@
-local state = {}
+local state = {
+	startTime = 0.0,
+	buildDir = "",
+	compiler = "",
+	samuraiPath = "",
+	builtPackages = {},
+}
 
 local function logInfo(msg)
 	print("[INFO]: " .. msg)
@@ -22,7 +28,7 @@ f0VMRgIBAQAAAAAAAAAAAAMAPgABAAAAQCQAAAAAAABAAAAAAAAAAPj1AAAAAAAAAAAAAEAAOAAOAEAA
 ]]
 
 local function loadSamurai()
-	local exe = io.open(state.samuraiPath, "r")
+	local exe = io.open(state.samuraiPath)
 	if exe then
 		exe:close()
 		logInfo("Cached Samurai executable found")
@@ -35,6 +41,7 @@ local function loadSamurai()
 	tmp:close()
 	os.execute("base64 -d " .. tmpPath .. " > " .. state.samuraiPath)
 	os.execute("chmod +x " .. state.samuraiPath)
+	os.execute("rm " .. tmpPath)
 end
 
 local function strSplit(text)
@@ -65,25 +72,27 @@ local function outputTransform(sources)
 	return result
 end
 
-local function addFile(sources, source)
-	local isGlob = source:find("*")
-	if not isGlob then
-		table.insert(sources, source)
-		return
-	end
-	local rev = source:reverse()
-	local lastSlash = #rev - rev:find("/") + 1
-	local dir = source:sub(1, lastSlash)
-	local pattern = source:sub(lastSlash, #source)
-	local ls, err = io.popen("ls" .. dir, "r")
-	if err then
-		logFatal("AddFile: Error listing directory '" .. dir .. "', err: " .. err)
-	end
-	local files = ls:read("a")
-	ls:close()
-	for _, file in ipairs(files) do
-		if globMatch(file, pattern) then
-			table.insert(sources, dir .. "/" .. file)
+local function addFiles(sources, sourceList)
+	for _, source in ipairs(sourceList) do
+		local isGlob = source:find("*")
+		if not isGlob then
+			table.insert(sources, source)
+			return
+		end
+		local rev = source:reverse()
+		local lastSlash = #rev - rev:find("/") + 1
+		local dir = source:sub(1, lastSlash)
+		local pattern = source:sub(lastSlash, #source)
+		local ls, err = io.popen("ls " .. dir, "r")
+		if err then
+			logFatal("AddFile: Error listing directory '" .. dir .. "', err: " .. err)
+		end
+		local files = strSplit(ls:read("a"))
+		ls:close()
+		for _, file in ipairs(files) do
+			if globMatch(file, pattern) then
+				table.insert(sources, dir .. "/" .. file)
+			end
 		end
 	end
 end
@@ -111,12 +120,18 @@ local function addLibraryPaths(libs, libList)
 	end
 end
 
-local function linkSystemLibraries(libs, libList)
-	for i, lib in ipairs(libList) do
+local function addStaticLibs(staticLibs, staticLibList)
+	for _, staticLib in ipairs(staticLibList) do
+		table.insert(staticLibs, staticLib)
+	end
+end
+
+local function linkSystemLibraries(libs, sysLibList)
+	for i, sysLib in ipairs(sysLibList) do
 		if i == 0 and #libs == 0 then
-			table.insert(libs, "-l" .. lib)
+			table.insert(libs, "-l" .. sysLib)
 		else
-			table.insert(libs, " -l" .. lib)
+			table.insert(libs, " -l" .. sysLib)
 		end
 	end
 end
@@ -128,15 +143,16 @@ function StartBuild(buildDir, compiler)
 	state.startTime = os.clock()
 	state.buildDir = buildDir or "./build"
 	state.compiler = compiler or "gcc"
-	state.samuraiPath = state.buildDir .. "/samurai"
+	state.samuraiPath = "./.cache/samurai"
 	os.execute("mkdir -p " .. state.buildDir)
+	os.execute("mkdir -p " .. "./.cache")
 	loadSamurai()
 	logInfo("Build started")
 end
 
 ---Call after all other functions finish
 function EndBuild()
-	logInfo("Build time: " .. state.elapsed .. "ms")
+	logInfo("Build time: " .. os.clock() - state.startTime .. "ms")
 end
 
 ---Runs the supplied command
@@ -201,9 +217,11 @@ Executable = {
 	linkerFlags = {},
 	sources = {},
 	includes = {},
+	staticLibs = {},
 	libs = {},
 	outputPath = "",
 	ninjaBuildPath = "",
+	packages = {},
 }
 
 ---Returns an executable options table, leave parameters empty for default options
@@ -212,8 +230,9 @@ Executable = {
 ---@param linkerFlags? string
 ---@param includes? string
 ---@param libs? string
+---@param staticLibs? string
 ---@return table
-function ExecutableOptions(output, flags, linkerFlags, includes, libs)
+function ExecutableOptions(output, flags, linkerFlags, includes, libs, staticLibs)
 	if not output then
 		logWarning("Executable: Using default build options")
 	end
@@ -223,6 +242,7 @@ function ExecutableOptions(output, flags, linkerFlags, includes, libs)
 		linkerFlags = linkerFlags,
 		includes = includes,
 		libs = libs,
+		staticLibs = staticLibs,
 	}
 end
 
@@ -242,41 +262,61 @@ function Executable:Create(options)
 	exec.sources = strSplit(options.sources) or {}
 	exec.includes = strSplit(options.includes) or {}
 	exec.libs = strSplit(options.libs) or {}
+	exec.staticLibs = strSplit(options.staticLibs) or {}
 	exec.outputPath = state.buildDir .. "/" .. exec.output
 	exec.ninjaBuildPath = state.buildDir .. "/exe-" .. exec.output .. ".ninja"
+	exec.packages = {}
 	return exec
 end
 
----Adds a file to the sources table
----@param source string
-function Executable:AddFile(source)
-	addFile(self.sources, source)
-end
-
----Adds multiple files to the sources table
+---Adds one or more files to the sources table
 ---@param ... string
 function Executable:AddFiles(...)
-	for _, src in ipairs(arg) do
-		addFile(self.sources, src)
-	end
+	local sources = { ... }
+	addFiles(self.sources, sources)
 end
 
 ---Adds include paths to the includes table
 ---@param ... string
 function Executable:AddIncludePaths(...)
-	addIncludePaths(self.includes, arg)
+	local includes = { ... }
+	addIncludePaths(self.includes, includes)
 end
 
 ---Adds library paths to the libs table
 ---@param ... string
 function Executable:AddLibraryPaths(...)
-	addLibraryPaths(self.libs, arg)
+	local libs = { ... }
+	addLibraryPaths(self.libs, libs)
+end
+
+---Adds static libraries to the staticLibs table
+---@param ... string
+function Executable:AddStaticLibs(...)
+	local staticLibs = { ... }
+	addStaticLibs(self.staticLibs, staticLibs)
 end
 
 ---Adds system libraries to the libs table
 ---@param ... string
 function Executable:LinkSystemLibraries(...)
-	linkSystemLibraries(self.libs, arg)
+	local sysLibs = { ... }
+	linkSystemLibraries(self.libs, sysLibs)
+end
+
+---Imports a dependency from a package table
+---@param package table
+function Executable:AddDependency(package)
+	if not package then
+		logFatal("Executable.AddDepedency: Undefined package")
+	end
+	local includes = {}
+	for i, inc in ipairs(package.includes) do
+		includes[i] = package.dir .. "/" .. inc
+	end
+	addIncludePaths(self.includes, includes)
+	self.packages[package.name] = package
+	addStaticLibs(self.staticLibs, { package.lib })
 end
 
 ---Buils the executable
@@ -285,6 +325,16 @@ function Executable:Install()
 		logFatal("Executable.Install: No source files provided")
 	elseif not self.output then
 		logFatal("Executable.Install: No output specified, ensure you call StartBuild")
+	end
+	for n, p in pairs(self.packages) do
+		if state.builtPackages[n] then
+			logInfo("Dependency '" .. n .. "' already built, skipping")
+		else
+			logInfo("Building dependency '" .. n .. "'")
+			state.builtPackages[n] = true
+			local staticLib = p.buildFn(p.dir, p.rules)
+			addStaticLibs(self.staticLibs, staticLib.staticLibs)
+		end
 	end
 	local buildCmd = {}
 	table.insert(buildCmd, "cc = " .. state.compiler .. "\n")
@@ -295,7 +345,7 @@ function Executable:Install()
 		table.insert(buildCmd, "flags = " .. table.concat(self.flags, " ") .. "\n")
 	end
 	if #self.includes > 0 then
-		table.insert(buildCmd, "includes = " .. table.concat(self.includes, " " .. "\n"))
+		table.insert(buildCmd, "includes = " .. table.concat(self.includes, " ") .. "\n")
 	end
 	if #self.libs > 0 then
 		table.insert(buildCmd, "libs = " .. table.concat(self.libs, " ") .. "\n")
@@ -341,7 +391,8 @@ function Executable:Install()
 			table.insert(output, " $builddir/" .. outputFile)
 		end
 	end
-	table.insert(buildCmd, "build $target: link " .. table.concat(output, " ") .. "\n\n")
+	table.insert(buildCmd,
+		"build $target: link " .. table.concat(output, " ") .. " " .. table.concat(self.staticLibs, " ") .. "\n\n")
 	table.insert(buildCmd, "default $target\n")
 	local ninjaBuildFile, err = io.open(self.ninjaBuildPath, "w")
 	if err then
@@ -353,8 +404,7 @@ function Executable:Install()
 	if res ~= 0 then
 		logFatal("Executable.Install: Build failed with code: " .. res)
 	end
-	state.elapsed = os.clock() - state.startTime
-	logSuccess("Build completed successfully")
+	logSuccess("Executable.Install: Build completed successfully")
 end
 
 StaticLib = {
@@ -363,8 +413,10 @@ StaticLib = {
 	arFlags = {},
 	sources = {},
 	includes = {},
+	staticLibs = {},
 	outputPath = {},
-	ninjaBuildPath = {},
+	ninjaBuildPath = "",
+	packages = {},
 }
 
 ---Returns a static lib options table, leave parameters empty for default options
@@ -372,8 +424,9 @@ StaticLib = {
 ---@param flags? string
 ---@param arFlags? string
 ---@param includes? string
+---@param staticLibs? string
 ---@return table
-function StaticLibOptions(output, flags, arFlags, includes)
+function StaticLibOptions(output, flags, arFlags, includes, staticLibs)
 	if not output then
 		output = "undef"
 		logWarning("StaticLib: Using default build options")
@@ -384,6 +437,7 @@ function StaticLibOptions(output, flags, arFlags, includes)
 		flags = flags,
 		arFlags = arFlags,
 		includes = includes,
+		staticLibs = staticLibs,
 	}
 end
 
@@ -402,29 +456,47 @@ function StaticLib:Create(options)
 	lib.arFlags = strSplit(options.arFlags) or { "rcs" }
 	lib.sources = strSplit(options.sources) or {}
 	lib.includes = strSplit(options.includes) or {}
+	lib.staticLibs = strSplit(options.staticLibs) or {}
 	lib.outputPath = state.buildDir .. "/" .. lib.output
+	lib.packages = {}
 	lib.ninjaBuildPath = state.buildDir .. "/lib-" .. lib.output .. ".ninja"
 	return lib
 end
 
----Adds a file to the sources table
----@param source string
-function StaticLib:AddFile(source)
-	addFile(self.sources, source)
-end
-
----Adds multiple files to the sources table
+---Adds one or more files to the sources table
 ---@param ... string
 function StaticLib:AddFiles(...)
-	for _, src in ipairs(arg) do
-		addFile(self.sources, src)
-	end
+	local sources = { ... }
+	addFiles(self.sources, sources)
 end
 
 ---Adds include paths to the includes table
 ---@param ... string
 function StaticLib:AddIncludePaths(...)
-	addIncludePaths(self.includes, arg)
+	local includes = { ... }
+	addIncludePaths(self.includes, includes)
+end
+
+---Adds static libs to the static libs table
+---@param ... string
+function StaticLib:AddStaticLibs(...)
+	local staticLibs = { ... }
+	addStaticLibs(self.staticLibs, staticLibs)
+end
+
+---Imports a dependency from a package table
+---@param package table
+function StaticLib:AddDependency(package)
+	if not package then
+		logFatal("StaticLib.AddDepedency: Undefined package")
+	end
+	local includes = {}
+	for i, inc in ipairs(package.includes) do
+		includes[i] = package.dir .. "/" .. inc
+	end
+	addIncludePaths(self.includes, includes)
+	self.packages[package.name] = package
+	addStaticLibs(self.staticLibs, { package.lib })
 end
 
 ---Builds the static library
@@ -433,6 +505,16 @@ function StaticLib:Install()
 		logFatal("StaticLib.Install: No source files provided")
 	elseif not self.output then
 		logFatal("StaticLib.Install: No output specified, ensure you call StartBuild")
+	end
+	for n, p in pairs(self.packages) do
+		if state.builtPackages[n] then
+			logInfo("Dependency '" .. n .. "' already built, skipping")
+		else
+			logInfo("Building dependency '" .. n .. "'")
+			state.builtPackages[n] = true
+			local staticLib = p.buildFn(p.dir, p.rules)
+			addStaticLibs(self.staticLibs, staticLib.staticLibs)
+		end
 	end
 	local buildCmd = {}
 	table.insert(buildCmd, "cc = " .. state.compiler .. "\n")
@@ -444,7 +526,7 @@ function StaticLib:Install()
 		table.insert(buildCmd, "ar_flags = " .. table.concat(self.arFlags, " ") .. "\n")
 	end
 	if #self.includes > 0 then
-		table.insert(buildCmd, "includes = " .. table.concat(self.includes, " " .. "\n"))
+		table.insert(buildCmd, "includes = " .. table.concat(self.includes, " ") .. "\n")
 	end
 	local pwd, err = io.popen("pwd", "r")
 	if err then
@@ -492,6 +574,38 @@ function StaticLib:Install()
 	if res ~= 0 then
 		logFatal("StaticLib.Install: Build failed with code: " .. res)
 	end
-	state.elapsed = os.clock() - state.startTime
-	logSuccess("Build completed successfully")
+	logSuccess("StaticLib.Install: Build completed successfully")
+end
+
+Package = {
+	name = "",
+	dir = "",
+	lib = "",
+	rules = nil,
+	includes = {},
+	buildFn = nil,
+}
+
+---Searches for package.lua in path, creates a package table
+---@param path string
+---@param rules? string
+---@return table
+function Package:Import(path, rules)
+	local pkg = {}
+	setmetatable(pkg, self)
+	self.__index = self
+	local filePath = path .. "/package.lua"
+	local packageFile = io.open(filePath)
+	if not packageFile then
+		logFatal("Package.Import: package.lua not found in directory: " .. path)
+	end
+	packageFile:close()
+	local import = dofile(filePath)
+	pkg.name = import.name
+	pkg.dir = path
+	pkg.rules = rules
+	pkg.lib = state.buildDir .. "/lib" .. import.name .. ".a"
+	pkg.includes = import.includePaths or {}
+	pkg.buildFn = import.build
+	return pkg
 end
