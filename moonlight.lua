@@ -6,19 +6,23 @@ local state = {
 	builtPackages = {},
 }
 
+---@param msg string
 local function logInfo(msg)
 	print("[INFO]: " .. msg)
 end
 
+---@param msg string
 local function logWarning(msg)
 	print("\27[33;1m[WARN]: " .. msg .. "\27[0m")
 end
 
+---@param msg string
 local function logFatal(msg)
 	print("\27[31;1m[FATAL]: " .. msg .. "\27[0m")
 	os.exit(1)
 end
 
+---@param msg string
 local function logSuccess(msg)
 	print("\27[32m[SUCCESS]: " .. msg .. "\27[0m")
 end
@@ -44,6 +48,8 @@ local function loadSamurai()
 	os.execute("rm " .. tmpPath)
 end
 
+---@param text string
+---@return table|nil
 local function strSplit(text)
 	if not text then
 		return nil
@@ -55,13 +61,48 @@ local function strSplit(text)
 	return result
 end
 
-local function globMatch(text, pattern)
-	if pattern == "*" then
-		return true
+---@param text string
+---@param pattern string
+---@return bool
+local function globMatch(text, glob)
+	local pattern = { "^" }
+	for i = 1, #glob do
+		local c = glob:sub(i, i)
+		if c == "*" then
+			table.insert(pattern, ".*")
+		elseif c == "?" then
+			table.insert(pattern, ".")
+		elseif c == "." or c == "%" or c == "+" or c == "-" or c == "^" or c == "$" then
+			table.insert(pattern, "%" .. c)
+		else
+			table.insert(pattern, c)
+		end
 	end
-	return text:match(pattern)
+	return text:match(table.concat(pattern)) ~= nil
 end
 
+---@param list table
+---@param path string
+local function getGlob(list, path)
+	local rev = path:reverse()
+	local lastSlash = #rev - rev:find("/") + 1
+	local dir = path:sub(1, lastSlash)
+	local pattern = path:sub(lastSlash + 1)
+	local ls, err = io.popen("ls " .. dir, "r")
+	if err then
+		logFatal("getGlob: Error listing directory '" .. dir .. "', err: " .. err)
+	end
+	local files = strSplit(ls:read("a"))
+	ls:close()
+	for _, file in ipairs(files) do
+		if globMatch(file, pattern) then
+			table.insert(list, dir .. "/" .. file)
+		end
+	end
+end
+
+---@param sources table
+---@return table
 local function outputTransform(sources)
 	local result = {}
 	for i, source in ipairs(sources) do
@@ -72,31 +113,20 @@ local function outputTransform(sources)
 	return result
 end
 
+---@param sources table
+---@param sourceList table
 local function addFiles(sources, sourceList)
 	for _, source in ipairs(sourceList) do
-		local isGlob = source:find("*")
-		if not isGlob then
+		if source:find("*") then
+			getGlob(sources, source)
+		else
 			table.insert(sources, source)
-			return
-		end
-		local rev = source:reverse()
-		local lastSlash = #rev - rev:find("/") + 1
-		local dir = source:sub(1, lastSlash)
-		local pattern = source:sub(lastSlash, #source)
-		local ls, err = io.popen("ls " .. dir, "r")
-		if err then
-			logFatal("AddFile: Error listing directory '" .. dir .. "', err: " .. err)
-		end
-		local files = strSplit(ls:read("a"))
-		ls:close()
-		for _, file in ipairs(files) do
-			if globMatch(file, pattern) then
-				table.insert(sources, dir .. "/" .. file)
-			end
 		end
 	end
 end
 
+---@param includes table
+---@param includeList table
 local function addIncludePaths(includes, includeList)
 	if #includes > 0 then
 		table.insert(includes, " ")
@@ -110,6 +140,8 @@ local function addIncludePaths(includes, includeList)
 	end
 end
 
+---@param libs table
+---@param libList table
 local function addLibraryPaths(libs, libList)
 	for i, lib in ipairs(libList) do
 		if i == 0 and #libs == 0 then
@@ -120,12 +152,20 @@ local function addLibraryPaths(libs, libList)
 	end
 end
 
+---@param staticLibs table
+---@param staticLibList table
 local function addStaticLibs(staticLibs, staticLibList)
 	for _, staticLib in ipairs(staticLibList) do
-		table.insert(staticLibs, staticLib)
+		if staticLib:find("*") then
+			getGlob(staticLibs, staticLib)
+		else
+			table.insert(staticLibs, staticLib)
+		end
 	end
 end
 
+---@param libs table
+---@param sysLibList table
 local function linkSystemLibraries(libs, sysLibList)
 	for i, sysLib in ipairs(sysLibList) do
 		if i == 0 and #libs == 0 then
@@ -319,6 +359,30 @@ function Executable:AddDependency(package)
 	addStaticLibs(self.staticLibs, { package.lib })
 end
 
+---Binds a port from a port table
+---@param port table
+function Executable:BindPort(port)
+	if not port then
+		logFatal("Executable.BindPort: Undefined port")
+	end
+	local includes = {}
+	for i, inc in ipairs(port.includes) do
+		includes[i] = port.dir .. "/" .. inc
+	end
+	local staticLibs = {}
+	for i, lib in ipairs(port.staticLibs) do
+		staticLibs[i] = port.dir .. "/" .. lib
+	end
+	local libs = {}
+	for i, lib in ipairs(port.libs) do
+		libs[i] = port.dir .. "/" .. lib
+	end
+	addIncludePaths(self.includes, includes)
+	addStaticLibs(self.staticLibs, staticLibs)
+	addLibraryPaths(self.libs, libs)
+	linkSystemLibraries(self.libs, port.sysLibs)
+end
+
 ---Buils the executable
 function Executable:Install()
 	if #self.sources == 0 then
@@ -336,8 +400,7 @@ function Executable:Install()
 			addStaticLibs(self.staticLibs, staticLib.staticLibs)
 		end
 	end
-	local buildCmd = {}
-	table.insert(buildCmd, "cc = " .. state.compiler .. "\n")
+	local buildCmd = { "cc = " .. state.compiler .. "\n" }
 	if #self.linkerFlags > 0 then
 		table.insert(buildCmd, "linker_flags = " .. table.concat(self.linkerFlags, " ") .. "\n")
 	end
@@ -499,6 +562,24 @@ function StaticLib:AddDependency(package)
 	addStaticLibs(self.staticLibs, { package.lib })
 end
 
+---Binds a port from a port table
+---@param port table
+function StaticLib:BindPort(port)
+	if not port then
+		logFatal("StaticLib.BindPort: Undefined port")
+	end
+	local includes = {}
+	for i, inc in ipairs(port.includes) do
+		includes[i] = port.dir .. "/" .. inc
+	end
+	local staticLibs = {}
+	for i, lib in ipairs(port.staticLibs) do
+		staticLibs[i] = port.dir .. "/" .. lib
+	end
+	addIncludePaths(self.includes, includes)
+	addStaticLibs(self.staticLibs, staticLibs)
+end
+
 ---Builds the static library
 function StaticLib:Install()
 	if #self.sources == 0 then
@@ -516,9 +597,7 @@ function StaticLib:Install()
 			addStaticLibs(self.staticLibs, staticLib.staticLibs)
 		end
 	end
-	local buildCmd = {}
-	table.insert(buildCmd, "cc = " .. state.compiler .. "\n")
-	table.insert(buildCmd, "ar = ar\n")
+	local buildCmd = { "cc = " .. state.compiler .. "\n", "ar = ar\n" }
 	if #self.flags > 0 then
 		table.insert(buildCmd, "flags = " .. table.concat(self.flags, " ") .. "\n")
 	end
@@ -591,9 +670,6 @@ Package = {
 ---@param rules? string
 ---@return table
 function Package:Import(path, rules)
-	local pkg = {}
-	setmetatable(pkg, self)
-	self.__index = self
 	local filePath = path .. "/package.lua"
 	local packageFile = io.open(filePath)
 	if not packageFile then
@@ -601,6 +677,12 @@ function Package:Import(path, rules)
 	end
 	packageFile:close()
 	local import = dofile(filePath)
+	if not import then
+		logFatal("Package.Import: package table not found in " .. filePath)
+	end
+	local pkg = {}
+	setmetatable(pkg, self)
+	self.__index = self
 	pkg.name = import.name
 	pkg.dir = path
 	pkg.rules = rules
@@ -608,4 +690,36 @@ function Package:Import(path, rules)
 	pkg.includes = import.includePaths or {}
 	pkg.buildFn = import.build
 	return pkg
+end
+
+Port = {
+	dir = "",
+	includes = {},
+	staticLibs = {},
+	libs = {},
+	sysLibs = {},
+}
+
+function Port:Get(path)
+	local filePath = path .. "/port.lua"
+	local portFile = io.open(filePath)
+	if not portFile then
+		logFatal("Port.Get: port.lua not found in directory: " .. path)
+	end
+	portFile:close()
+	local tbl = dofile(filePath)
+	if not tbl then
+		logFatal("Port.Get: port table not found in " .. filePath)
+	end
+	local port = {}
+	setmetatable(port, self)
+	self.__index = self
+	port.dir = path
+	port.includes = strSplit(tbl.includes) or {}
+	port.staticLibs = strSplit(tbl.staticLibs) or {}
+	port.libs = strSplit(tbl.libs) or {}
+	port.sysLibs = strSplit(tbl.sysLibs) or {}
+	logInfo("Port.Get: building port: '" .. path .. "'")
+	os.execute("(cd " .. path .. " && " .. tbl.cmd .. ")")
+	return port
 end
