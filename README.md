@@ -79,6 +79,6 @@ exe:BindPort(port)
 ```
 
 ## Acknowledgements
-This project takes heavy inspiration from [mate.h](https://github.com/TomasBorques/mate.h),
+This project takes heavy inspiration from [mate.h](https://github.com/TomasBorquez/mate.h),
 and the Zig build system. Moonlight would not be possible without [Samurai](https://github.com/michaelforney/samurai),
 the licence for which can be found [here](https://github.com/michaelforney/samurai/blob/master/LICENSE)
