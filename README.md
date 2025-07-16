@@ -23,8 +23,8 @@ RunCommand(exe.outputPath)
 ```
 
 To use Moonlight all you need is to copy `moonlight.lua` into your project
-root, write a `build.lua` file and run it with `luajit build.lua`. [Samurai](https://github.com/michaelforney/samurai)
-is baked into `moonlight.lua` and is decoded and stored in the build directory.
+root, write a `build.lua` file and run it with `luajit build.lua`. [samurai](https://github.com/michaelforney/samurai)
+is baked into `moonlight.lua` and is decoded and stored in the .cache directory.
 
 ### package.lua
 An example `package.lua`
@@ -80,5 +80,5 @@ exe:BindPort(port)
 
 ## Acknowledgements
 This project takes heavy inspiration from [mate.h](https://github.com/TomasBorquez/mate.h),
-and the Zig build system. Moonlight would not be possible without [Samurai](https://github.com/michaelforney/samurai),
+and the Zig build system. Moonlight would not be possible without [samurai](https://github.com/michaelforney/samurai),
 the licence for which can be found [here](https://github.com/michaelforney/samurai/blob/master/LICENSE)
