@@ -65,6 +65,9 @@ local function loadSamurai()
 	logInfo("Unpacking Samurai executable")
 	local tmpPath = state.samuraiPath .. ".b64"
 	local tmp = io.open(tmpPath, "w")
+	if not tmp then
+		logFatal("loadSamurai: Failed to unpack Samurai executable")
+	end
 	tmp:write(samurai_b64)
 	tmp:close()
 	os.execute("base64 -d " .. tmpPath .. " > " .. state.samuraiPath)
@@ -85,42 +88,58 @@ local function strSplit(text)
 	return result
 end
 
----@param text string
----@param pattern string
----@return bool
-local function globMatch(text, glob)
+---@param glob string
+---@return string,string
+local function parseGlob(glob)
+	local sepIdx = glob:find("[*?%[]")
+	if not sepIdx then
+		return glob, "*"
+	end
+	local slashIdx = glob:sub(1, sepIdx):match(".*()/")
+	if slashIdx then
+		return glob:sub(1, slashIdx), glob:sub(slashIdx + 1)
+	else
+		return "./", glob
+	end
+end
+
+---@param glob string
+---@return string
+local function globToPattern(glob)
 	local pattern = { "^" }
 	for i = 1, #glob do
 		local c = glob:sub(i, i)
 		if c == "*" then
-			table.insert(pattern, ".*")
+			if glob:sub(i, i + 1) == "**" then
+				i = i + 1
+			else
+				table.insert(pattern, "[^/]*")
+			end
 		elseif c == "?" then
 			table.insert(pattern, ".")
-		elseif c == "." or c == "%" or c == "+" or c == "-" or c == "^" or c == "$" then
+		elseif c:match("[%[%]%.%%%+%-%^%$]") then
 			table.insert(pattern, "%" .. c)
 		else
 			table.insert(pattern, c)
 		end
 	end
-	return text:match(table.concat(pattern)) ~= nil
+	table.insert(pattern, "$")
+	return table.concat(pattern)
 end
 
 ---@param list table
 ---@param path string
 local function getGlob(list, path)
-	local rev = path:reverse()
-	local lastSlash = #rev - rev:find("/") + 1
-	local dir = path:sub(1, lastSlash)
-	local pattern = path:sub(lastSlash + 1)
-	local ls, err = io.popen("ls " .. dir, "r")
+	local root, glob = parseGlob(path)
+	local pattern = globToPattern(glob)
+	local find, err = io.popen("find '" .. root .. "' -type f", "r")
 	if err then
-		logFatal("getGlob: Error listing directory '" .. dir .. "', err: " .. err)
+		logFatal("getGlob: Error finding pattern '" .. root "', err: " .. err)
 	end
-	local files = strSplit(ls:read("a"))
-	ls:close()
-	for _, file in ipairs(files) do
-		if globMatch(file, pattern) then
-			table.insert(list, dir .. "/" .. file)
+	for file in find:lines() do
+		local relPath = file:sub(#root + 1)
+		if relPath:match(pattern) then
+			table.insert(list, file)
 		end
 	end
 end
@@ -216,7 +235,7 @@ end
 
 ---Call after all other functions finish
 function EndBuild()
-	logInfo("Build time: " .. os.clock() - state.startTime .. "ms")
+	logInfo("Build time: " .. (os.clock() - state.startTime) * 1000 .. "ms")
 end
 
 ---Runs the supplied command
@@ -422,6 +441,7 @@ function Executable:Install()
 			state.builtPackages[n] = true
 			local staticLib = p.buildFn(p.dir, p.rules)
 			addStaticLibs(self.staticLibs, staticLib.staticLibs)
+			linkSystemLibraries(self.libs, staticLib.sysLibs)
 		end
 	end
 	local buildCmd = { "cc = " .. state.compiler .. "\n" }
@@ -501,6 +521,7 @@ StaticLib = {
 	sources = {},
 	includes = {},
 	staticLibs = {},
+	sysLibs = {},
 	outputPath = {},
 	ninjaBuildPath = "",
 	packages = {},
@@ -544,6 +565,7 @@ function StaticLib:Create(options)
 	lib.sources = strSplit(options.sources) or {}
 	lib.includes = strSplit(options.includes) or {}
 	lib.staticLibs = strSplit(options.staticLibs) or {}
+	lib.sysLibs = {}
 	lib.outputPath = state.buildDir .. "/" .. lib.output
 	lib.packages = {}
 	lib.ninjaBuildPath = state.buildDir .. "/lib-" .. lib.output .. ".ninja"
@@ -602,6 +624,7 @@ function StaticLib:BindPort(port)
 	end
 	addIncludePaths(self.includes, includes)
 	addStaticLibs(self.staticLibs, staticLibs)
+	self.sysLibs = port.sysLibs
 end
 
 ---Builds the static library
@@ -683,8 +706,8 @@ end
 Package = {
 	name = "",
 	dir = "",
-	lib = "",
 	rules = nil,
+	lib = "",
 	includes = {},
 	buildFn = nil,
 }
@@ -711,7 +734,7 @@ function Package:Import(path, rules)
 	pkg.dir = path
 	pkg.rules = rules
 	pkg.lib = state.buildDir .. "/lib" .. import.name .. ".a"
-	pkg.includes = import.includePaths or {}
+	pkg.includes = import.includes or {}
 	pkg.buildFn = import.build
 	return pkg
 end
