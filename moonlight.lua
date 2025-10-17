@@ -294,6 +294,7 @@ function CompilerFlags(warnings, debug, optimization, std)
 	return table.concat(flags, " ")
 end
 
+---@class Executable
 Executable = {
 	output = nil,
 	flags = {},
@@ -331,7 +332,7 @@ end
 
 ---Creates a new executable
 ---@param options table
----@return table
+---@return Executable
 function Executable:Create(options)
 	if not options then
 		logFatal("Executable.Create: Undefined build options")
@@ -388,7 +389,7 @@ function Executable:LinkSystemLibraries(...)
 end
 
 ---Imports a dependency from a package table
----@param package table
+---@param package Package
 function Executable:AddDependency(package)
 	if not package then
 		logFatal("Executable.AddDepedency: Undefined package")
@@ -403,7 +404,7 @@ function Executable:AddDependency(package)
 end
 
 ---Binds a port from a port table
----@param port table
+---@param port Port
 function Executable:BindPort(port)
 	if not port then
 		logFatal("Executable.BindPort: Undefined port")
@@ -514,6 +515,7 @@ function Executable:Install()
 	logSuccess("Executable.Install: Build completed successfully")
 end
 
+---@class StaticLib
 StaticLib = {
 	output = nil,
 	flags = {},
@@ -551,7 +553,7 @@ end
 
 ---Creates a new static library
 ---@param options table
----@return table
+---@return StaticLib
 function StaticLib:Create(options)
 	if not options then
 		logFatal("StaticLib.Create: Undefined build options")
@@ -594,7 +596,7 @@ function StaticLib:AddStaticLibs(...)
 end
 
 ---Imports a dependency from a package table
----@param package table
+---@param package Package
 function StaticLib:AddDependency(package)
 	if not package then
 		logFatal("StaticLib.AddDepedency: Undefined package")
@@ -609,7 +611,7 @@ function StaticLib:AddDependency(package)
 end
 
 ---Binds a port from a port table
----@param port table
+---@param port Port
 function StaticLib:BindPort(port)
 	if not port then
 		logFatal("StaticLib.BindPort: Undefined port")
@@ -703,6 +705,7 @@ function StaticLib:Install()
 	logSuccess("StaticLib.Install: Build completed successfully")
 end
 
+---@class Package
 Package = {
 	name = "",
 	dir = "",
@@ -715,7 +718,7 @@ Package = {
 ---Searches for package.lua in path, creates a package table
 ---@param path string
 ---@param rules? string
----@return table
+---@return Package
 function Package:Import(path, rules)
 	local filePath = path .. "/package.lua"
 	local packageFile = io.open(filePath)
@@ -739,6 +742,7 @@ function Package:Import(path, rules)
 	return pkg
 end
 
+---@class Port
 Port = {
 	dir = "",
 	includes = {},
@@ -747,6 +751,9 @@ Port = {
 	sysLibs = {},
 }
 
+---Searches for port.lua in path, creates a port table and compiles the port
+---@param path string
+---@return Port
 function Port:Get(path)
 	local filePath = path .. "/port.lua"
 	local portFile = io.open(filePath)
