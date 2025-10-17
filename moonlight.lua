@@ -512,7 +512,7 @@ function Executable:Install()
 	if res ~= 0 then
 		logFatal("Executable.Install: Build failed with code: " .. res)
 	end
-	logSuccess("Executable.Install: Build completed successfully")
+	logSuccess("Build completed successfully: " .. self.output)
 end
 
 ---@class StaticLib
@@ -702,7 +702,7 @@ function StaticLib:Install()
 	if res ~= 0 then
 		logFatal("StaticLib.Install: Build failed with code: " .. res)
 	end
-	logSuccess("StaticLib.Install: Build completed successfully")
+	logSuccess("Build completed successfully: " .. self.output)
 end
 
 ---@class Package
@@ -773,7 +773,7 @@ function Port:Get(path)
 	port.staticLibs = strSplit(tbl.staticLibs) or {}
 	port.libs = strSplit(tbl.libs) or {}
 	port.sysLibs = strSplit(tbl.sysLibs) or {}
-	logInfo("Port.Get: building port: '" .. path .. "'")
+	logInfo("Building port: '" .. path .. "'")
 	os.execute("(cd " .. path .. " && " .. tbl.cmd .. ")")
 	return port
 end
